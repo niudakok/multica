@@ -17,3 +17,4 @@ qodercli
 qoderclicn
 traecli
 qwenpaw
+atomcode

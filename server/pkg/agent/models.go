@@ -214,6 +214,14 @@ func ListModels(ctx context.Context, providerType, executablePath string) (Catal
 		return cachedDiscovery(providerType, func() (Catalog, error) {
 			return discovered(discoverQwenpawModels(ctx, executablePath))
 		})
+	case "atomcode":
+		// AtomCode is ACP-native (`atomcode acp`) but its session/new response
+		// carries only sessionId — no `models` field (实测 atomcode 5.0.3).
+		// The model catalog lives in the user's local ~/.atomcode/config.toml
+		// and is account/host-specific, so discoverACPModels would return empty
+		// anyway. Keep the explicit empty list so manual model entry stays
+		// available without advertising a config-specific model to other accounts.
+		return Catalog{Models: []Model{}}, nil
 	case "grok":
 		// xAI Grok Build is ACP-native (`grok agent stdio`); model catalog
 		// comes from session/new. Falls back to a small static list so the

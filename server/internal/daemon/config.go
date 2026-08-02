@@ -119,6 +119,7 @@ type Config struct {
 	CodebuddyArgs                  []string
 	QwenArgs                       []string
 	QwenpawArgs                    []string
+	AtomcodeArgs                   []string
 
 	// ProfileCommandOverrides maps a custom runtime profile_id -> the absolute
 	// executable path to use for that profile on THIS machine (MUL-3284).
@@ -220,7 +221,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// can re-run the same discovery on a live daemon (MUL-5439).
 	agents := probeAgentCLIs()
 	if len(agents) == 0 && !overrides.AllowNoAgents {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codex, copilot, opencode, deveco, openclaw, hermes, pi, cursor-agent, kimi, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, or qwenpaw and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codex, copilot, opencode, deveco, openclaw, hermes, pi, cursor-agent, kimi, kiro-cli, agy, qodercli, qoderclicn, traecli, grok, qwen, qwenpaw, or atomcode and ensure it is on PATH")
 	}
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
@@ -240,6 +241,10 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		return Config{}, err
 	}
 	qwenpawArgs, err := shellArgsFromEnv("MULTICA_QWENPAW_ARGS")
+	if err != nil {
+		return Config{}, err
+	}
+	atomcodeArgs, err := shellArgsFromEnv("MULTICA_ATOMCODE_ARGS")
 	if err != nil {
 		return Config{}, err
 	}
@@ -484,6 +489,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		CodebuddyArgs:                  codebuddyArgs,
 		QwenArgs:                       qwenArgs,
 		QwenpawArgs:                    qwenpawArgs,
+		AtomcodeArgs:                   atomcodeArgs,
 		ProfileCommandOverrides:        profileCommandOverrides,
 	}, nil
 }
@@ -744,7 +750,7 @@ func isExecutableFile(path string) bool {
 // invocation, instead of paying the cost-per-miss.
 var defaultAgentCommandNames = []string{
 	"claude", "codex", "opencode", "deveco", "openclaw", "hermes",
-	"pi", "cursor-agent", "copilot", "kimi", "kiro-cli", "codebuddy", "agy", "qodercli", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw",
+	"pi", "cursor-agent", "copilot", "kimi", "kiro-cli", "codebuddy", "agy", "qodercli", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw", "atomcode",
 }
 
 // codexDesktopAppBundlePaths returns candidate macOS app-bundle locations for

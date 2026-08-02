@@ -218,7 +218,7 @@ type Config struct {
 }
 
 // New creates a Backend for the given agent type.
-// Supported types: "claude", "codebuddy", "codex", "copilot", "opencode", "deveco", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity", "qoder", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw".
+// Supported types: "claude", "codebuddy", "codex", "copilot", "opencode", "deveco", "openclaw", "hermes", "pi", "cursor", "kimi", "kiro", "antigravity", "qoder", "qoderclicn", "traecli", "grok", "qwen", "qwenpaw", "atomcode".
 //
 // SupportedTypes is the canonical whitelist of agent types eligible to back a
 // custom runtime profile. It MUST stay in lockstep with the
@@ -255,6 +255,7 @@ var SupportedTypes = []string{
 	"grok",
 	"qwen",
 	"qwenpaw",
+	"atomcode",
 }
 
 // IsSupportedType reports whether agentType is in the SupportedTypes whitelist.
@@ -338,8 +339,10 @@ func New(agentType string, cfg Config) (Backend, error) {
 		return &qwenBackend{cfg: cfg}, nil
 	case "qwenpaw":
 		return &qwenpawBackend{cfg: cfg}, nil
+	case "atomcode":
+		return &atomcodeBackend{cfg: cfg}, nil
 	default:
-		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codebuddy, codex, copilot, opencode, deveco, openclaw, hermes, pi, cursor, kimi, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw)", agentType)
+		return nil, fmt.Errorf("unknown agent type: %q (supported: claude, codebuddy, codex, copilot, opencode, deveco, openclaw, hermes, pi, cursor, kimi, kiro, antigravity, qoder, qoderclicn, traecli, grok, qwen, qwenpaw, atomcode)", agentType)
 	}
 }
 
@@ -374,6 +377,7 @@ var launchHeaders = map[string]string{
 	"grok":        "grok agent stdio",
 	"qwen":        "qwen -p (stream-json)",
 	"qwenpaw":     "qwenpaw acp",
+	"atomcode":    "atomcode -p (headless)",
 }
 
 // LaunchHeader returns the user-visible launch skeleton for agentType, or an

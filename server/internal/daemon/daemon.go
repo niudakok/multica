@@ -4299,6 +4299,7 @@ var runtimeDisplayNameOverrides = map[string]string{
 	"qoderclicn": "Qoder CN",
 	"qwen":       "Qwen Code",
 	"qwenpaw":    "QwenPaw",
+	"atomcode":   "AtomCode",
 }
 
 // providerDisplayName returns the human-facing runtime name for a provider key.
@@ -6752,6 +6753,8 @@ func defaultArgsForProvider(cfg Config, provider string) []string {
 		args = cfg.QwenArgs
 	case "qwenpaw":
 		args = cfg.QwenpawArgs
+	case "atomcode":
+		args = cfg.AtomcodeArgs
 	default:
 		return nil
 	}

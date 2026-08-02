@@ -211,6 +211,11 @@ func localSkillRootsForProvider(provider string) ([]localSkillRoot, bool, error)
 			}
 		}
 		providerRoot = filepath.Join(qwenpawHome, "skill_pool")
+	case "atomcode":
+		// AtomCode's user-level skills live in ~/.atomcode/skills (no
+		// override env var); project-level skills are discovered from the
+		// workdir by the CLI itself.
+		providerRoot = filepath.Join(home, ".atomcode", "skills")
 	default:
 		return nil, false, nil
 	}

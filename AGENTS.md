@@ -7,6 +7,8 @@ This file provides guidance to AI agents when working with code in this reposito
 > live in **CLAUDE.md** at the project root. Read that file first.
 > Use `Makefile`, `package.json`, and `pnpm-workspace.yaml` as the
 > source of truth for the full command list.
+> For the local agent daemon, read **CLI_AND_DAEMON.md** (`multica` CLI,
+> `multica daemon start/restart/stop`, `~/.multica/daemon.log`).
 
 ## Quick Reference
 
@@ -15,12 +17,24 @@ This file provides guidance to AI agents when working with code in this reposito
 Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared packages.
 
 - `server/` - Go backend (Chi router, sqlc, gorilla/websocket)
+- `server/cmd/multica/` - the `multica` CLI, which also runs the local agent daemon
+- `server/pkg/agent/` - one adapter file per supported AI CLI runtime (see Agent Runtimes below)
 - `apps/web/` - Next.js frontend (App Router)
 - `apps/desktop/` - Electron desktop app
 - `packages/core/` - Headless business logic (Zustand stores, React Query hooks, API client)
 - `packages/ui/` - Atomic UI components (shadcn/Base UI, zero business logic)
 - `packages/views/` - Shared business pages/components
 - `packages/tsconfig/` - Shared TypeScript config
+
+### Agent Runtimes (daemon)
+
+The daemon detects installed AI CLIs, registers them as agent runtimes, and executes tasks by spawning the CLI. Each runtime is one backend in `server/pkg/agent/` (`claude.go`, `codex.go`, `opencode.go`, `openclaw.go`, `qwen.go`, ...). Three integration styles exist:
+
+- ACP (Agent Client Protocol, JSON-RPC over stdio): hermes, kimi, kiro, traecli, copilot, grok, qoder — driven via `acpDiscoveryProvider` / `discoverACPModels`
+- stream-json NDJSON on stdout: opencode, openclaw
+- flag-based / `-p` prompt style: claude, codex, qwen, cursor, etc.
+
+**Adding a new runtime touches these in lockstep:** `SupportedTypes` + the `New()` switch in `server/pkg/agent/agent.go`, the `runtime_profile.protocol_family` CHECK constraint (own migration, `NOT VALID` like migrations 134/136/175/179/242), a model-discovery path, and `scripts/agent-cli-command-names.txt`. Agent tests must never resolve/execute a real installed CLI; real-agent smoke tests need the `agentintegration` build tag and `MULTICA_RUN_REAL_AGENT_SMOKE=1`. See CLAUDE.md "Testing" and `server/pkg/agent/agent.go` header comment.
 
 ### State Management (critical)
 
@@ -45,10 +59,14 @@ Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared package
 
 ```bash
 make dev              # Auto-setup + start everything
+make daemon           # Restart local agent daemon (multica daemon restart --profile local)
+make test             # Go tests (needs local PostgreSQL; runs migrations first)
+make check            # Full verification pipeline (typecheck + TS tests + Go tests + E2E)
+make build            # Build server/multica/migrate binaries into server/bin
+make sqlc             # Regenerate sqlc code after SQL changes
 pnpm typecheck        # TypeScript check
 pnpm test             # TS unit tests (Vitest)
-make test             # Go tests
-make check            # Full verification pipeline
+pnpm exec playwright test  # E2E
 ```
 
 See CLAUDE.md for the authoritative rules and common commands.
