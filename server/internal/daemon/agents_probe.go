@@ -258,6 +258,11 @@ var probeAgentCLIs = func() map[string]AgentEntry {
 	if e, ok := probe("MULTICA_QWENPAW_PATH", "qwenpaw", ""); ok {
 		agents["qwenpaw"] = e
 	}
+	// AtomCode (`atomcode`) runs headlessly with -p (no ACP transport). Its
+	// AGENTS.md task context is prepared by execenv.
+	if e, ok := probe("MULTICA_ATOMCODE_PATH", "atomcode", "MULTICA_ATOMCODE_MODEL"); ok {
+		agents["atomcode"] = e
+	}
 	return agents
 }
 
