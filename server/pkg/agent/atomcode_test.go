@@ -32,7 +32,7 @@ func TestBuildAtomcodeArgs(t *testing.T) {
 	}, slog.Default())
 
 	// Base daemon-owned args come first.
-	wantPrefix := []string{"-p", "task prompt", "-y", "--no-telemetry", "--model", "deepseek-v4-flash"}
+	wantPrefix := []string{"-p", "task prompt", "-y", "--no-telemetry", "--verbose", "--model", "deepseek-v4-flash"}
 	if len(args) < len(wantPrefix) {
 		t.Fatalf("args too short: %v", args)
 	}
@@ -92,6 +92,43 @@ func TestAtomcodeSessionIDStablePerCwd(t *testing.T) {
 	}
 	if !strings.HasPrefix(a, "atomcode-") {
 		t.Fatalf("session id missing prefix: %q", a)
+	}
+}
+
+func TestAtomcodeStatusParser(t *testing.T) {
+	t.Parallel()
+	msgCh := make(chan Message, 8)
+	p := &atomcodeStatusParser{msgCh: msgCh}
+
+	for _, line := range []string{
+		"[thinking] Let me check the files",
+		"[tool→ bash] {\"command\": \"ls -la\"}",
+		"[tool← bash] 95 chars",
+		"[done] 11.9s tokens=37.52K turns=2 tool_calls=1",
+		"unrecognised noise line",
+	} {
+		_, _ = p.Write([]byte(line))
+	}
+	close(msgCh)
+
+	var got []Message
+	for m := range msgCh {
+		got = append(got, m)
+	}
+	if len(got) != 4 {
+		t.Fatalf("parsed %d messages, want 4 (noise dropped): %+v", len(got), got)
+	}
+	if got[0].Type != MessageThinking || got[0].Content != "Let me check the files" {
+		t.Fatalf("msg[0] = %+v, want thinking block", got[0])
+	}
+	if got[1].Type != MessageToolUse || got[1].Tool != "bash" {
+		t.Fatalf("msg[1] = %+v, want tool-use bash", got[1])
+	}
+	if got[2].Type != MessageToolResult || got[2].Tool != "bash" {
+		t.Fatalf("msg[2] = %+v, want tool-result bash", got[2])
+	}
+	if got[3].Type != MessageStatus || got[3].Status != "completed" {
+		t.Fatalf("msg[3] = %+v, want completed status", got[3])
 	}
 }
 

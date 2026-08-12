@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
 	"strings"
@@ -13,8 +14,8 @@ import (
 )
 
 // atomcodeBackend implements Backend by spawning the AtomCode CLI in headless
-// non-interactive mode (`atomcode -p <prompt> -y --no-telemetry`) and reading
-// the final plain-text answer from stdout.
+// non-interactive mode (`atomcode -p <prompt> -y --no-telemetry --verbose`) and
+// reading the final plain-text answer from stdout.
 //
 // Why not ACP? atomcode 5.0.3 ships an `acp` subcommand, but its ACP server
 // does not implement session/load (agentCapabilities.loadSession=false → all
@@ -30,14 +31,21 @@ import (
 // working across turns; when a ResumeSessionID arrives we inject `-c` to
 // continue the local session. `-c` with no prior session silently starts a
 // fresh one, so first turns and fresh workdirs are safe.
+//
+// Running status: without `--verbose` atomcode's headless stdout carries only
+// the final answer — no thinking blocks or tool calls — so Multica's UI would
+// show a silent run. `--verbose` makes atomcode emit structured status lines on
+// stderr ([thinking] / [tool→ …] / [tool← …] / [done]), which we parse and
+// forward as MessageThinking / MessageToolUse / MessageToolResult so the run
+// shows live progress.
 type atomcodeBackend struct {
 	cfg Config
 }
 
 // atomcodeBlockedArgs are owned by Multica. AtomCode accepts the task prompt
 // as a flag, so custom args must not replace it; -y / --model / --no-telemetry
-// are daemon-owned execution controls; -C/--dir would re-point the working
-// directory; -c/--continue is daemon-owned (resume is driven by
+// / --verbose are daemon-owned execution controls; -C/--dir would re-point the
+// working directory; -c/--continue is daemon-owned (resume is driven by
 // opts.ResumeSessionID, never by user-supplied flags).
 var atomcodeBlockedArgs = map[string]blockedArgMode{
 	"-p":                             blockedWithValue,  // headless prompt
@@ -50,6 +58,7 @@ var atomcodeBlockedArgs = map[string]blockedArgMode{
 	"--continue":                     blockedStandalone, // resume is daemon-owned via opts.ResumeSessionID
 	"--model":                        blockedWithValue,  // model is selected by Multica
 	"--no-telemetry":                 blockedStandalone, // daemon runs must not phone home
+	"--verbose":                      blockedStandalone, // daemon-owned: feeds the status parser
 }
 
 // atomcodeSessionID derives a deterministic, cwd-keyed session id so the daemon
@@ -66,7 +75,7 @@ func atomcodeSessionID(cwd string) string {
 }
 
 func buildAtomcodeArgs(prompt string, opts ExecOptions, logger *slog.Logger) []string {
-	args := []string{"-p", prompt, "-y", "--no-telemetry"}
+	args := []string{"-p", prompt, "-y", "--no-telemetry", "--verbose"}
 	if opts.ResumeSessionID != "" {
 		// Continue atomcode's local session for this workdir. Safe on first
 		// turn too: `-c` with no prior session silently starts a new one.
@@ -78,6 +87,41 @@ func buildAtomcodeArgs(prompt string, opts ExecOptions, logger *slog.Logger) []s
 	args = append(args, filterCustomArgs(opts.ExtraArgs, atomcodeBlockedArgs, logger)...)
 	args = append(args, filterCustomArgs(opts.CustomArgs, atomcodeBlockedArgs, logger)...)
 	return args
+}
+
+// atomcodeStatusParser turns atomcode --verbose stderr lines into Message
+// events. Line shapes (verified against atomcode 5.0.3):
+//
+//	[thinking] <text>…                    → MessageThinking
+//	[tool→ <name>] <json args>            → MessageToolUse
+//	[tool← <name>] <len> chars / err      → MessageToolResult
+//	[done] <summary>                      → MessageStatus (completed)
+//
+// Anything unrecognised is dropped (it still lands in daemon logs via the
+// MultiWriter that feeds this parser).
+type atomcodeStatusParser struct {
+	msgCh chan<- Message
+}
+
+func (p *atomcodeStatusParser) Write(b []byte) (int, error) {
+	line := strings.TrimSpace(string(b))
+	if strings.HasPrefix(line, "[thinking] ") {
+		text := strings.TrimPrefix(line, "[thinking] ")
+		if text != "" {
+			trySend(p.msgCh, Message{Type: MessageThinking, Content: text})
+		}
+	} else if strings.HasPrefix(line, "[tool→ ") {
+		rest := strings.TrimPrefix(line, "[tool→ ")
+		name, argsJSON, _ := strings.Cut(rest, "] ")
+		trySend(p.msgCh, Message{Type: MessageToolUse, Tool: name, Content: argsJSON})
+	} else if strings.HasPrefix(line, "[tool← ") {
+		rest := strings.TrimPrefix(line, "[tool← ")
+		name, summary, _ := strings.Cut(rest, "] ")
+		trySend(p.msgCh, Message{Type: MessageToolResult, Tool: name, Output: summary})
+	} else if strings.HasPrefix(line, "[done] ") {
+		trySend(p.msgCh, Message{Type: MessageStatus, Status: "completed", Content: strings.TrimPrefix(line, "[done] ")})
+	}
+	return len(b), nil
 }
 
 func (b *atomcodeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
@@ -107,8 +151,12 @@ func (b *atomcodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		cancel()
 		return nil, fmt.Errorf("atomcode stdout pipe: %w", err)
 	}
-	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[atomcode:stderr] "), agentStderrTailBytes)
-	cmd.Stderr = stderrBuf
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("atomcode stderr pipe: %w", err)
+	}
+
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start atomcode: %w", err)
@@ -117,10 +165,28 @@ func (b *atomcodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
+
+	// stderr is both logged and parsed into status messages (--verbose).
+	stderrTail := newStderrTail(io.Discard, agentStderrTailBytes)
+	statusParser := &atomcodeStatusParser{msgCh: msgCh}
+	stderrSink := io.MultiWriter(
+		newLogWriter(b.cfg.Logger, "[atomcode:stderr] "),
+		statusParser,
+		stderrTail,
+	)
+	stderrDone := make(chan struct{})
+	go func() {
+		defer close(stderrDone)
+		_, _ = io.Copy(stderrSink, stderr)
+	}()
+
 	go func() {
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
+		defer func() {
+			_ = cmd.Wait()
+		}()
 
 		started := time.Now()
 		go func() {
@@ -146,6 +212,7 @@ func (b *atomcodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		}
 		exitErr := cmd.Wait()
 		duration := time.Since(started)
+		<-stderrDone
 
 		status := "completed"
 		var errMsg string
@@ -160,7 +227,7 @@ func (b *atomcodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 			errMsg = fmt.Sprintf("atomcode exited with error: %v", exitErr)
 		}
 		if errMsg != "" {
-			errMsg = withAgentStderr(errMsg, "atomcode", stderrBuf.Tail())
+			errMsg = withAgentStderr(errMsg, "atomcode", stderrTail.Tail())
 		}
 		b.cfg.Logger.Info("atomcode finished", "pid", cmd.Process.Pid, "status", status, "duration", duration.Round(time.Millisecond).String())
 		resCh <- Result{
